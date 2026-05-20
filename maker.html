@@ -164,6 +164,9 @@
                     <button onclick="addObject('gem')" class="flex flex-col items-center justify-center bg-gray-800/95 border border-gray-600 rounded-xl w-16 h-16 active:bg-gray-700 shrink-0">
                         <i data-lucide="gem" class="w-6 h-6 mb-1 text-teal-400"></i><span class="text-[10px]">Gem</span>
                     </button>
+                    <button onclick="addObject('camera')" class="flex flex-col items-center justify-center bg-gray-800/95 border border-gray-600 rounded-xl w-16 h-16 active:bg-gray-700 shrink-0">
+                        <i data-lucide="camera" class="w-6 h-6 mb-1 text-pink-400"></i><span class="text-[10px]">Camera</span>
+                    </button>
                     <button onclick="addObject('light')" class="flex flex-col items-center justify-center bg-gray-800/95 border border-gray-600 rounded-xl w-16 h-16 active:bg-gray-700 shrink-0">
                         <i data-lucide="sun" class="w-6 h-6 mb-1 text-yellow-200"></i><span class="text-[10px]">Light</span>
                     </button>
@@ -329,7 +332,7 @@
                         <button onclick="saveRenderCamera()" class="flex-1 bg-gray-800 border border-gray-600 py-2 rounded-lg text-xs font-semibold hover:bg-gray-700 active:bg-gray-600 flex flex-col items-center gap-1">
                             <i data-lucide="camera" class="w-4 h-4 text-gray-300"></i><span>Save View</span>
                         </button>
-                        <button onclick="previewRenderCamera()" class="flex-1 bg-gray-800 border border-gray-600 py-2 rounded-lg text-xs font-semibold hover:bg-gray-700 active:bg-gray-600 flex flex-col items-center gap-1">
+                        <button id="btn-preview-cam" onclick="toggleCameraPreview()" class="flex-1 bg-gray-800 border border-gray-600 py-2 rounded-lg text-xs font-semibold hover:bg-gray-700 active:bg-gray-600 flex flex-col items-center gap-1">
                             <i data-lucide="eye" class="w-4 h-4 text-gray-300"></i><span>Preview</span>
                         </button>
                     </div>
@@ -397,6 +400,7 @@
             isRigging: false,
             isPivotMode: false,
             isRecording: false,
+            isBaking: false,
             isMagnetMode: false,
             
             isMultiSelectMode: false,
@@ -404,6 +408,9 @@
             
             history: [],
             cameraSaved: { pos: null, target: null, set: false },
+            workingCameraPos: new THREE.Vector3(),
+            workingOrbitTarget: new THREE.Vector3(),
+            isPreviewingCamera: false,
             pivotHelper: null,
 
             gridGroup: new THREE.Group(),
@@ -452,6 +459,13 @@
                     m.dispose();
                 });
             }
+        }
+
+        function getAnimCamera() { 
+            return App.objects.find(j => { 
+                const v = getVisual(j); 
+                return v && v.userData.type === 'camera'; 
+            }); 
         }
 
         function getGridLabel(text, x, y, z, color) {
@@ -1208,6 +1222,26 @@
                             pointLight.castShadow = true; 
                             visual.add(pointLight);
                             visual.userData.isLight = true;
+                        } else if (item.type === 'camera') {
+                            visual = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.8), new THREE.MeshStandardMaterial({ color: item.color || 0x222222 }));
+                            const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.4, 16), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+                            lens.rotation.x = Math.PI / 2;
+                            lens.position.z = -0.6;
+                            visual.add(lens);
+
+                            const fGeo = new THREE.BufferGeometry().setFromPoints([
+                                new THREE.Vector3(0,0,0), new THREE.Vector3(-0.5, 0.5, -1),
+                                new THREE.Vector3(0,0,0), new THREE.Vector3(0.5, 0.5, -1),
+                                new THREE.Vector3(0,0,0), new THREE.Vector3(0.5, -0.5, -1),
+                                new THREE.Vector3(0,0,0), new THREE.Vector3(-0.5, -0.5, -1),
+                                new THREE.Vector3(-0.5, 0.5, -1), new THREE.Vector3(0.5, 0.5, -1),
+                                new THREE.Vector3(0.5, 0.5, -1), new THREE.Vector3(0.5, -0.5, -1),
+                                new THREE.Vector3(0.5, -0.5, -1), new THREE.Vector3(-0.5, -0.5, -1),
+                                new THREE.Vector3(-0.5, -0.5, -1), new THREE.Vector3(-0.5, 0.5, -1),
+                            ]);
+                            const frustum = new THREE.LineSegments(fGeo, new THREE.LineBasicMaterial({ color: 0x00ff00 }));
+                            visual.add(frustum);
+                            visual.userData.isCameraObj = true;
                         } else {
                             const geo = createGeometry(item.type);
                             const isPlane = item.type === 'plane';
@@ -1382,6 +1416,26 @@
                     pointLight.castShadow = true;
                     visual.add(pointLight);
                     visual.userData.isLight = true;
+                } else if (item.type === 'camera') {
+                    visual = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.8), new THREE.MeshStandardMaterial({ color: item.color || 0x222222 }));
+                    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.4, 16), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+                    lens.rotation.x = Math.PI / 2;
+                    lens.position.z = -0.6;
+                    visual.add(lens);
+
+                    const fGeo = new THREE.BufferGeometry().setFromPoints([
+                        new THREE.Vector3(0,0,0), new THREE.Vector3(-0.5, 0.5, -1),
+                        new THREE.Vector3(0,0,0), new THREE.Vector3(0.5, 0.5, -1),
+                        new THREE.Vector3(0,0,0), new THREE.Vector3(0.5, -0.5, -1),
+                        new THREE.Vector3(0,0,0), new THREE.Vector3(-0.5, -0.5, -1),
+                        new THREE.Vector3(-0.5, 0.5, -1), new THREE.Vector3(0.5, 0.5, -1),
+                        new THREE.Vector3(0.5, 0.5, -1), new THREE.Vector3(0.5, -0.5, -1),
+                        new THREE.Vector3(0.5, -0.5, -1), new THREE.Vector3(-0.5, -0.5, -1),
+                        new THREE.Vector3(-0.5, -0.5, -1), new THREE.Vector3(-0.5, 0.5, -1),
+                    ]);
+                    const frustum = new THREE.LineSegments(fGeo, new THREE.LineBasicMaterial({ color: 0x00ff00 }));
+                    visual.add(frustum);
+                    visual.userData.isCameraObj = true;
                 } else {
                     const geo = createGeometry(item.type);
                     const isPlane = item.type === 'plane';
@@ -1478,6 +1532,27 @@
                 visual.add(light);
                 visual.userData.isLight = true;
                 joint.position.y = 2;
+            } else if (type === 'camera') {
+                visual = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.8), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+                const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.4, 16), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+                lens.rotation.x = Math.PI / 2;
+                lens.position.z = -0.6;
+                visual.add(lens);
+
+                const fGeo = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(0,0,0), new THREE.Vector3(-0.5, 0.5, -1),
+                    new THREE.Vector3(0,0,0), new THREE.Vector3(0.5, 0.5, -1),
+                    new THREE.Vector3(0,0,0), new THREE.Vector3(0.5, -0.5, -1),
+                    new THREE.Vector3(0,0,0), new THREE.Vector3(-0.5, -0.5, -1),
+                    new THREE.Vector3(-0.5, 0.5, -1), new THREE.Vector3(0.5, 0.5, -1),
+                    new THREE.Vector3(0.5, 0.5, -1), new THREE.Vector3(0.5, -0.5, -1),
+                    new THREE.Vector3(0.5, -0.5, -1), new THREE.Vector3(-0.5, -0.5, -1),
+                    new THREE.Vector3(-0.5, -0.5, -1), new THREE.Vector3(-0.5, 0.5, -1),
+                ]);
+                const frustum = new THREE.LineSegments(fGeo, new THREE.LineBasicMaterial({ color: 0x00ff00 }));
+                visual.add(frustum);
+                visual.userData.isCameraObj = true;
+                joint.position.y = 1;
             } else {
                 const geo = createGeometry(type);
                 const isPlane = type === 'plane';
@@ -1962,12 +2037,40 @@
             showToast("Render Camera View Saved!");
         }
 
-        function previewRenderCamera() {
-            if(!App.cameraSaved.set) return showToast("No camera saved. Use 'Save View' first.");
-            App.camera.position.copy(App.cameraSaved.pos);
-            App.orbit.target.copy(App.cameraSaved.target);
-            App.orbit.update();
-            showToast("Previewing Render Camera");
+        function toggleCameraPreview() {
+            App.isPreviewingCamera = !App.isPreviewingCamera;
+            const btn = document.getElementById('btn-preview-cam');
+            const animCam = getAnimCamera();
+
+            if (App.isPreviewingCamera) {
+                if (animCam) {
+                    App.workingCameraPos.copy(App.camera.position);
+                    App.workingOrbitTarget.copy(App.orbit.target);
+                    App.orbit.enabled = false;
+                    App.transform.detach();
+                    btn.classList.add('bg-emerald-600');
+                    btn.innerHTML = `<i data-lucide="eye-off" class="w-4 h-4 text-white"></i><span>Exit Cam</span>`;
+                    showToast("Previewing Animated Camera");
+                } else if (App.cameraSaved.set) {
+                    App.camera.position.copy(App.cameraSaved.pos);
+                    App.orbit.target.copy(App.cameraSaved.target);
+                    App.orbit.update();
+                    App.isPreviewingCamera = false; 
+                    showToast("Previewing Saved Static View");
+                } else {
+                    App.isPreviewingCamera = false;
+                    showToast("Add a Camera Object or Save a View first");
+                }
+            } else {
+                App.camera.position.copy(App.workingCameraPos);
+                App.orbit.target.copy(App.workingOrbitTarget);
+                App.orbit.update();
+                App.orbit.enabled = true;
+                btn.classList.remove('bg-emerald-600');
+                btn.innerHTML = `<i data-lucide="eye" class="w-4 h-4 text-gray-300"></i><span>Preview</span>`;
+                showToast("Exited Camera Preview");
+            }
+            lucide.createIcons();
         }
 
         async function bakeVideo(resSetting, fpsSetting) {
@@ -2005,7 +2108,13 @@
             const origH = window.innerHeight;
             const origAspect = App.camera.aspect;
             
-            if (App.cameraSaved.set) {
+            const animCam = getAnimCamera();
+            let oldCamVis = true;
+
+            if (animCam) {
+                const v = getVisual(animCam);
+                if (v) { oldCamVis = v.visible; v.visible = false; }
+            } else if (App.cameraSaved.set) {
                 App.camera.position.copy(App.cameraSaved.pos);
                 App.orbit.target.copy(App.cameraSaved.target);
             } else { saveRenderCamera(); }
@@ -2017,6 +2126,7 @@
             App.orbit.enabled = false; 
             hideAllTabs();
             deselectObject();
+            App.isBaking = true;
             App.isRecording = true;
 
             App.objects.forEach(j => { const v = getVisual(j); if(v && v.userData.isLight) v.material.visible = false; });
@@ -2043,17 +2153,22 @@
                 playAnimation(false);
 
                 const frameDuration = 1000 / fpsSetting;
-                let currentTime = 0;
+                let currentTime = window.performance.now();
 
                 for (let f = 0; f < totalFrames; f++) {
                     TWEEN.update(currentTime);
-                    if(App.trajectoryLine) App.trajectoryLine.visible = false; // Hide path while rendering
-                    App.orbit.update();
+                    if (animCam) {
+                        animCam.getWorldPosition(App.camera.position);
+                        animCam.getWorldQuaternion(App.camera.quaternion);
+                    } else {
+                        App.orbit.update();
+                    }
                     App.renderer.render(App.scene, App.camera);
                     
+                    // Force WebGL to flush using native WebGL context (fixes Three.js null target error)
                     const gl = App.renderer.getContext();
                     gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
-
+                    
                     const canvas = App.renderer.domElement;
                     const bitmap = await createImageBitmap(canvas);
                     
@@ -2087,6 +2202,7 @@
                 showToast("Baking failed. Error logged.");
             }
 
+            App.isBaking = false;
             App.isRecording = false;
             App.orbit.enabled = true;
             App.camera.position.copy(origPos);
@@ -2096,6 +2212,12 @@
             App.camera.updateProjectionMatrix();
             App.orbit.update();
             App.objects.forEach(j => { const v = getVisual(j); if(v && v.userData.isLight) v.material.visible = true; });
+            
+            if (animCam) {
+                const v = getVisual(animCam);
+                if (v) v.visible = oldCamVis;
+            }
+            
             overlay.classList.remove('active');
         }
 
@@ -2117,7 +2239,14 @@
             const origH = window.innerHeight;
             const origAspect = App.camera.aspect;
             
-            if (App.cameraSaved.set) {
+            const animCam = getAnimCamera();
+            let oldCamVis = true;
+
+            if (animCam) {
+                const v = getVisual(animCam);
+                if (v) { oldCamVis = v.visible; v.visible = false; }
+                App.isPreviewingCamera = true; 
+            } else if (App.cameraSaved.set) {
                 App.camera.position.copy(App.cameraSaved.pos);
                 App.orbit.target.copy(App.cameraSaved.target);
             } else { saveRenderCamera(); }
@@ -2177,6 +2306,12 @@
                 App.orbit.update();
                 App.objects.forEach(j => { const v = getVisual(j); if(v && v.userData.isLight) v.material.visible = true; });
 
+                if (animCam) {
+                    App.isPreviewingCamera = false;
+                    const v = getVisual(animCam);
+                    if (v) v.visible = oldCamVis;
+                }
+
                 UI.recIndicator.classList.add('hidden');
                 showToast("Video Export Complete!");
             };
@@ -2199,9 +2334,24 @@
 
         function animateLoop(time) {
             requestAnimationFrame(animateLoop);
+            if (App.isBaking) return;
+            
             TWEEN.update(time);
             updateDynamicGrid();
-            App.orbit.update();
+            
+            if (App.isPreviewingCamera) {
+                const animCam = getAnimCamera();
+                if (animCam) {
+                    animCam.getWorldPosition(App.camera.position);
+                    animCam.getWorldQuaternion(App.camera.quaternion);
+                } else {
+                    App.isPreviewingCamera = false;
+                    App.orbit.enabled = true;
+                }
+            } else {
+                App.orbit.update();
+            }
+
             App.renderer.render(App.scene, App.camera);
         }
 
@@ -2209,4 +2359,4 @@
 
     </script>
 </body>
-</html>
+    </html>
