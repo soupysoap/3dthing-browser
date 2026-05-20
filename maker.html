@@ -1906,7 +1906,7 @@
             joint.rotation.copy(anim.keys[0].r);
             
             const visual = getVisual(joint);
-            const scaleTarget = (visual && !joint.userData.isGroup && !visual.userData.isLight && !visual.userData.isCamera) ? visual.scale : joint.scale;
+            const scaleTarget = (visual && !joint.userData.isGroup && !joint.userData.isLight && !joint.userData.isCamera) ? visual.scale : joint.scale;
             scaleTarget.copy(anim.keys[0].s);
 
             const easeFn = EASE_MAP[anim.ease] || TWEEN.Easing.Quadratic.InOut;
@@ -2097,10 +2097,16 @@
                 App.camera.updateProjectionMatrix();
             }
 
-            // Hide lights AND the physical camera object from the final video render
+            // Hide light mesh-bulbs (but NOT the light effect) and camera box
             App.objects.forEach(j => { 
                 const v = getVisual(j); 
-                if(v && (v.userData.isLight || v.userData.isCamera)) v.visible = false; 
+                if(v && v.userData.isLight) {
+                    v.material.transparent = true;
+                    v.material.opacity = 0;
+                    v.material.needsUpdate = true;
+                } else if (v && v.userData.isCamera) {
+                    v.visible = false;
+                }
             });
             App.gridGroup.visible = false;
 
@@ -2123,17 +2129,13 @@
                     framerate: fpsSetting
                 });
 
-                // Start Tweens and capture the absolute performance clock time
                 let currentTime = window.performance.now();
                 playAnimation(false);
 
                 const frameDuration = 1000 / fpsSetting;
 
                 for (let f = 0; f < totalFrames; f++) {
-                    // Inject the calculated absolute time into the tween engine
                     TWEEN.update(currentTime);
-                    
-                    // Force the scene to mathematically update world locations based on the new Tween values
                     App.scene.updateMatrixWorld(true);
                     
                     if (sceneCam) {
@@ -2150,9 +2152,6 @@
 
                     App.renderer.render(App.scene, renderCamera);
                     
-                    const gl = App.renderer.getContext();
-                    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
-
                     const canvas = App.renderer.domElement;
                     const bitmap = await createImageBitmap(canvas);
                     
@@ -2162,7 +2161,6 @@
                     videoEncoder.encode(frame, { keyFrame: f % fpsSetting === 0 });
                     frame.close();
 
-                    // Advance the mathematical clock by exactly 1 frame
                     currentTime += frameDuration;
                     
                     if (f % 5 === 0) {
@@ -2203,7 +2201,13 @@
             // Restore visibility in viewport
             App.objects.forEach(j => { 
                 const v = getVisual(j); 
-                if(v && (v.userData.isLight || v.userData.isCamera)) v.visible = true; 
+                if(v && v.userData.isLight) {
+                    v.material.transparent = false;
+                    v.material.opacity = 1;
+                    v.material.needsUpdate = true;
+                } else if (v && v.userData.isCamera) {
+                    v.visible = true;
+                }
             });
             overlay.classList.remove('active');
         }
@@ -2252,10 +2256,16 @@
             stopAnimations();
             deselectObject();
             
-            // Hide camera box in fallback realtime export
+            // Hide light mesh-bulbs and camera box
             App.objects.forEach(j => { 
                 const v = getVisual(j); 
-                if(v && (v.userData.isLight || v.userData.isCamera)) v.visible = false; 
+                if(v && v.userData.isLight) {
+                    v.material.transparent = true;
+                    v.material.opacity = 0;
+                    v.material.needsUpdate = true;
+                } else if (v && v.userData.isCamera) {
+                    v.visible = false;
+                }
             });
             App.gridGroup.visible = false;
 
@@ -2293,7 +2303,13 @@
                 // Restore visibility in fallback realtime export
                 App.objects.forEach(j => { 
                     const v = getVisual(j); 
-                    if(v && (v.userData.isLight || v.userData.isCamera)) v.visible = true; 
+                    if(v && v.userData.isLight) {
+                        v.material.transparent = false;
+                        v.material.opacity = 1;
+                        v.material.needsUpdate = true;
+                    } else if (v && v.userData.isCamera) {
+                        v.visible = true;
+                    }
                 });
 
                 UI.recIndicator.classList.add('hidden');
@@ -2318,13 +2334,12 @@
 
         function animateLoop(time) {
             requestAnimationFrame(animateLoop);
-            if (App.isBaking) return; // Freeze rendering background UI while generating high quality video 
+            if (App.isBaking) return; 
             
             TWEEN.update(time);
             
             const sceneCam = getSceneCamera();
             
-            // Override renderer perspective if previewing OR currently recording a video
             if (App.isPreviewingCamera || (App.isRecording && sceneCam)) {
                 if (sceneCam) {
                     const wPos = new THREE.Vector3();
