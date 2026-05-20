@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -426,7 +425,10 @@
             App.orbit.dampingFactor = 0.05;
 
             App.transform = new THREE.TransformControls(App.camera, App.renderer.domElement);
-            App.transform.addEventListener('dragging-changed', e => { App.orbit.enabled = !e.value; });
+            App.transform.addEventListener('dragging-changed', e => { 
+                App.orbit.enabled = !e.value; 
+                if (!e.value) saveState();
+            });
             App.transform.addEventListener('change', () => { 
                 if (App.selectedJoint) {
                     updateDimensionsUI();
@@ -452,6 +454,7 @@
 
             addObject('cube');
             setMode('translate');
+            saveState();
             animateLoop();
         }
 
@@ -504,6 +507,7 @@
             App.objects.push(joint);
             
             selectObject(joint);
+            saveState();
             showToast("Added " + type);
         }
 
@@ -662,6 +666,7 @@
             box.getSize(currentSize);
 
             visual.scale.set(w / (currentSize.x / visual.scale.x), h / (currentSize.y / visual.scale.y), d / (currentSize.z / visual.scale.z));
+            saveState();
         }
 
         function changeColor(e) {
@@ -673,6 +678,74 @@
                 else if (visual.material) visual.material.color.set(hex);
             }
             UI.colorDisplay.style.backgroundColor = hex;
+            saveState();
+        }
+
+        function applyTexture(e) {
+            if (!App.selectedJoint) return;
+            const visual = getVisual(App.selectedJoint);
+            if (!visual || visual.userData.isLight || visual.userData.isCamera) return showToast("Cannot texture this object");
+            
+            const file = e.target.files[0];
+            if(!file) return;
+
+            const reader = new FileReader();
+            reader.onload = ev => {
+                visual.userData.textureBase64 = ev.target.result;
+                new THREE.TextureLoader().load(ev.target.result, tex => {
+                    tex.encoding = THREE.sRGBEncoding || 3001;
+                    visual.material.map = tex;
+                    visual.material.color.setHex(0xffffff); 
+                    visual.material.needsUpdate = true;
+                    saveState();
+                    showToast("Texture applied!");
+                });
+            };
+            reader.readAsDataURL(file);
+            e.target.value = '';
+        }
+
+        function cloneSelected() {
+            if (!App.selectedJoint) return;
+            const visual = getVisual(App.selectedJoint);
+            if (!visual) return;
+            
+            const type = visual.userData.type;
+            if (type === 'camera') return showToast("Cannot clone camera. Add a new one.");
+            
+            const newJoint = new THREE.Group();
+            newJoint.userData = { isJoint: true, anim: { keys: [], duration: 2000, delay: 0, ease: 'quad', loop: 'none', tweens: [] } };
+            
+            let newVisual;
+            if (type === 'light') {
+                newVisual = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 16), new THREE.MeshBasicMaterial({ color: visual.children[0].color.getHex() }));
+                const light = new THREE.PointLight(visual.children[0].color.getHex(), 1, 20);
+                newVisual.add(light);
+                newVisual.userData.isLight = true;
+            } else {
+                newVisual = new THREE.Mesh(createGeometry(type), visual.material.clone());
+                newVisual.castShadow = true; newVisual.receiveShadow = true;
+                if (visual.userData.textureBase64) newVisual.userData.textureBase64 = visual.userData.textureBase64;
+            }
+            
+            newVisual.userData.isVisual = true;
+            newVisual.userData.type = type;
+            newJoint.add(newVisual);
+            
+            newJoint.position.copy(App.selectedJoint.position).add(new THREE.Vector3(0.5, 0, 0.5));
+            newJoint.rotation.copy(App.selectedJoint.rotation);
+            newJoint.scale.copy(App.selectedJoint.scale);
+            
+            newVisual.position.copy(visual.position);
+            newVisual.rotation.copy(visual.rotation);
+            newVisual.scale.copy(visual.scale);
+            
+            App.scene.add(newJoint);
+            App.objects.push(newJoint);
+            
+            selectObject(newJoint);
+            saveState();
+            showToast("Cloned object!");
         }
 
         function deleteSelected() {
@@ -681,6 +754,7 @@
             App.selectedJoint.parent.remove(App.selectedJoint);
             App.objects = App.objects.filter(o => o !== App.selectedJoint);
             deselectObject();
+            saveState();
             showToast("Object deleted");
         }
 
@@ -700,6 +774,7 @@
             App.isRigging = false;
             document.getElementById('btn-parent').innerHTML = `Set Parent`;
             document.getElementById('btn-parent').classList.remove('animate-pulse');
+            saveState();
             showToast("Successfully Rigged!");
             updateUI();
         }
@@ -707,6 +782,7 @@
         function unparentSelected() {
             if(!App.selectedJoint || App.selectedJoint.parent === App.scene) return;
             App.scene.attach(App.selectedJoint);
+            saveState();
             showToast("Detached to Scene Root");
             updateUI();
         }
@@ -1076,6 +1152,175 @@
             if(sceneCam && !App.isPreviewingCamera) getVisual(sceneCam).visible = true;
             App.objects.forEach(j => { const v = getVisual(j); if(v && v.userData.isLight) v.visible = true; });
             overlay.classList.remove('active');
+        }
+
+        function exportVideo() {
+            if (App.isRecording || App.isBaking) return;
+            bakeVideo();
+        }
+
+        function serializeScene() {
+            const data = { objects: [] };
+            App.objects.forEach(joint => {
+                const pUuid = (joint.parent && joint.parent !== App.scene && joint.parent.userData.isJoint) ? joint.parent.uuid : null;
+                const visual = getVisual(joint);
+                if (!visual) return;
+                
+                const anim = joint.userData.anim;
+                const objData = {
+                    uuid: joint.uuid,
+                    type: visual.userData.type,
+                    parentUuid: pUuid,
+                    position: joint.position.toArray(),
+                    rotation: joint.rotation.toArray(),
+                    scale: joint.scale.toArray(),
+                    visualPosition: visual.position.toArray(),
+                    visualRotation: visual.rotation.toArray(),
+                    visualScale: visual.scale.toArray(),
+                    anim: {
+                        keys: anim.keys ? anim.keys.map(k => ({ p: k.p.toArray(), r: k.r.toArray(), s: k.s.toArray() })) : [],
+                        duration: anim.duration, delay: anim.delay, ease: anim.ease, loop: anim.loop
+                    }
+                };
+                
+                if (visual.userData.isLight) {
+                    objData.color = visual.children[0].color.getHex();
+                    objData.intensity = visual.children[0].intensity;
+                } else if (visual.userData.isCamera) {
+                    // camera doesn't need color export right now
+                } else {
+                    objData.color = visual.material.color.getHex();
+                    if (visual.userData.textureBase64) objData.textureBase64 = visual.userData.textureBase64;
+                }
+                data.objects.push(objData);
+            });
+            return JSON.stringify(data);
+        }
+
+        function saveState() {
+            const stateJSON = serializeScene();
+            if (App.history.length > 0 && App.history[App.history.length - 1] === stateJSON) return;
+            App.history.push(stateJSON);
+            if (App.history.length > 30) App.history.shift();
+        }
+
+        function undo() {
+            if (App.history.length <= 1) return showToast("Nothing to undo");
+            App.history.pop(); 
+            loadStateFromJSON(App.history[App.history.length - 1]);
+            showToast("Undo successful");
+        }
+
+        function loadStateFromJSON(jsonString) {
+            const data = JSON.parse(jsonString);
+            deselectObject();
+            
+            App.objects.forEach(j => {
+                if (j.parent) j.parent.remove(j);
+            });
+            App.objects = [];
+            const uuidMap = {};
+            
+            data.objects.forEach(item => {
+                const joint = new THREE.Group();
+                joint.uuid = item.uuid;
+                joint.userData.isJoint = true;
+                
+                let loadedKeys = item.anim.keys ? item.anim.keys.map(k => ({
+                    p: new THREE.Vector3().fromArray(k.p),
+                    r: new THREE.Euler().fromArray(k.r),
+                    s: new THREE.Vector3().fromArray(k.s)
+                })) : [];
+
+                joint.userData.anim = { 
+                    keys: loadedKeys, 
+                    duration: item.anim.duration || 2000, delay: item.anim.delay || 0, ease: item.anim.ease || 'quad', loop: item.anim.loop || 'none', tweens: [] 
+                };
+                
+                joint.position.fromArray(item.position);
+                joint.rotation.fromArray(item.rotation);
+                joint.scale.fromArray(item.scale);
+                
+                let visual = null;
+                if (item.type === 'light') {
+                    visual = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 16), new THREE.MeshBasicMaterial({ color: item.color }));
+                    const pointLight = new THREE.PointLight(item.color, item.intensity || 1, 20);
+                    visual.add(pointLight);
+                    visual.userData.isLight = true;
+                } else if (item.type === 'camera') {
+                    visual = new THREE.Group();
+                    const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.6, 1), new THREE.MeshStandardMaterial({color: 0x333333}));
+                    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.5, 16), new THREE.MeshStandardMaterial({color: 0x111111}));
+                    lens.rotation.x = Math.PI / 2;
+                    lens.position.z = -0.6;
+                    visual.add(body, lens);
+                    const helper = new THREE.CameraHelper(new THREE.PerspectiveCamera(45, 16/9, 0.1, 5));
+                    visual.add(helper);
+                    visual.userData.isCamera = true;
+                } else {
+                    const geo = createGeometry(item.type);
+                    visual = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ 
+                        color: item.color, 
+                        side: item.type === 'plane' ? THREE.DoubleSide : THREE.FrontSide 
+                    }));
+                    visual.castShadow = true;
+                    visual.receiveShadow = true;
+                    
+                    if (item.textureBase64) {
+                        visual.userData.textureBase64 = item.textureBase64;
+                        new THREE.TextureLoader().load(item.textureBase64, tex => {
+                            tex.encoding = THREE.sRGBEncoding || 3001;
+                            visual.material.map = tex;
+                            visual.material.color.setHex(0xffffff);
+                            visual.material.needsUpdate = true;
+                        });
+                    }
+                }
+                
+                if (visual) {
+                    visual.userData.isVisual = true;
+                    visual.userData.type = item.type;
+                    visual.position.fromArray(item.visualPosition);
+                    visual.rotation.fromArray(item.visualRotation);
+                    visual.scale.fromArray(item.visualScale);
+                    joint.add(visual);
+                }
+                
+                uuidMap[item.uuid] = joint;
+                App.objects.push(joint);
+            });
+            
+            data.objects.forEach(item => {
+                const joint = uuidMap[item.uuid];
+                if (item.parentUuid && uuidMap[item.parentUuid]) uuidMap[item.parentUuid].add(joint);
+                else App.scene.add(joint);
+            });
+            
+            updateUI();
+        }
+
+        function saveProject() {
+            const blob = new Blob([serializeScene()], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = "3D_Studio_Project.json"; a.click();
+            URL.revokeObjectURL(url);
+            showToast("Project Saved!");
+        }
+
+        function loadProject(event) {
+            const file = event.target.files[0];
+            if(!file) return;
+            const reader = new FileReader();
+            reader.onload = e => {
+                try {
+                    loadStateFromJSON(e.target.result);
+                    App.history = [e.target.result];
+                    showToast("Project Loaded Successfully!");
+                } catch(err) { showToast("Error loading project file."); }
+            };
+            reader.readAsText(file);
+            event.target.value = ''; 
         }
 
         function hideAllTabs() {
